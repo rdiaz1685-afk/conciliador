@@ -12,23 +12,24 @@ const App = () => {
         if (!data) return;
 
         const worksheetData = [
-            ["ID Innovat", "Nombre Innovat", "Factura", "Método Pago", "Monto Innovat", "Fecha Banco", "Confianza", "Status"],
+            ["ID Innovat", "Nombre Innovat", "Factura", "Método Pago", "Referencia (I)", "Monto Innovat", "Fecha Banco", "Confianza", "Status"],
             ...data.matches.map((m: any) => [
                 m.a.id,
                 m.a.name,
                 m.a.factura || "-",
                 m.a.metodoPago || "-",
+                m.a.referencia || "-",
                 m.a.amount,
                 m.b.date,
                 m.confidence + "%",
                 m.confidence === 100 ? "Conciliado" : "Sugerido"
             ]),
             [],
-            ["Solo en Innovat", "Nombre", "Factura", "Pago", "Importe"],
-            ...data.onlyInnovat.map((t: any) => [t.id, t.name, t.factura || "-", t.metodoPago || "-", t.amount]),
+            ["Solo en Innovat", "Nombre", "Factura", "Pago", "Ref", "Importe"],
+            ...data.onlyInnovat.map((t: any) => [t.id, t.name, t.factura || "-", t.metodoPago || "-", t.referencia || "-", t.amount]),
             [],
-            ["Solo en Banco", "", "", "", "Importe"],
-            ...data.onlyBanco.map((t: any) => [t.id, t.name, "-", "-", t.amount])
+            ["Solo en Banco", "", "", "", "", "Importe"],
+            ...data.onlyBanco.map((t: any) => [t.id, t.name, "-", "-", "-", t.amount])
         ];
 
         const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
@@ -68,45 +69,60 @@ const App = () => {
                 if (!line.trim()) return null;
                 const parts = splitCSV(line);
 
-                // 1. Buscar algo que parezca una FECHA (DD/MM/YYYY)
-                const dateIdx = parts.findIndex(p => /\d{1,2}\/\d{1,2}\/\d{4}/.test(p));
-                if (dateIdx === -1) return null;
+                if (type === 'innovat') {
+                    // LÓGICA FIJA PARA INNOVAT (Basada en tu archivo):
+                    // 0: Fecha, 1: Nombre, 2: Clave/ID, 3: Importe, ..., 8: Ref (I), 10: Factura (K), 12: Pago (M)
+                    const date = parts[0] || "";
+                    if (!/\d{1,2}\/\d{1,2}\/\d{4}/.test(date)) return null;
 
-                // 2. Buscar algo que parezca un MONTO
-                let amount = 0;
-                for (let i = 0; i < parts.length; i++) {
-                    const val = cleanAmount(parts[i]);
-                    if (val > 0 && i !== dateIdx && parts[i].includes('.')) {
-                        amount = val;
-                        break;
+                    const name = parts[1] || "S/N";
+                    const id = parts[2] || "S/R";
+                    const amount = cleanAmount(parts[3] || "0");
+                    if (amount <= 0) return null;
+
+                    return {
+                        date,
+                        name,
+                        id: id.replace(/["']/g, ""),
+                        amount,
+                        source: type,
+                        status: 'pending',
+                        originalLine: line,
+                        factura: parts[10] ? parts[10].replace(/["'$]/g, "").trim() : "-",
+                        metodoPago: parts[12] ? parts[12].replace(/["'$]/g, "").trim() : "-",
+                        referencia: parts[8] ? parts[8].replace(/["'$]/g, "").trim() : "-"
+                    };
+                } else {
+                    // BANCO: Mantenemos el Detector Inteligente
+                    const dateIdx = parts.findIndex(p => /\d{1,2}\/\d{1,2}\/\d{4}/.test(p));
+                    if (dateIdx === -1) return null;
+
+                    let amount = 0;
+                    for (let i = 0; i < parts.length; i++) {
+                        const val = cleanAmount(parts[i]);
+                        if (val > 0 && i !== dateIdx && parts[i].includes('.')) {
+                            amount = val;
+                            break;
+                        }
                     }
+                    if (amount <= 0) return null;
+
+                    const namePart = parts.find(p => p.length > 10 && !p.includes('/') && !p.includes('$')) || "S/N";
+                    const idPart = parts.find(p => p.length >= 4 && p.length <= 8 && !isNaN(Number(p.replace(/\D/g, "")))) || "S/R";
+
+                    return {
+                        date: parts[dateIdx],
+                        name: namePart,
+                        id: idPart,
+                        amount: amount,
+                        source: type,
+                        status: 'pending',
+                        originalLine: line,
+                        factura: "-",
+                        metodoPago: "-",
+                        referencia: "-"
+                    };
                 }
-                if (amount <= 0) return null;
-
-                // 3. Buscar Nombre e ID
-                const namePart = parts.find(p => p.length > 10 && !p.includes('/') && !p.includes('$')) || "S/N";
-                const idPart = parts.find(p => p.length >= 4 && p.length <= 8 && !isNaN(Number(p.replace(/\D/g, "")))) || "S/R";
-
-                // 4. LÓGICA DE EXTRACCIÓN (K=10 y M=12)
-                // Usamos una lista de palabras MÁS corta y precisa para el método
-                const pms = ['TARJETA', 'EFECTIVO', 'STP', 'CHEQUE', 'DEPOSITO', 'TERMINAL'];
-                const metodoEncontrado = parts.find(p => pms.some(m => p.toUpperCase() === m)) || "-";
-
-                // Buscamos la FACTURA (Columna K es índice 10)
-                let factura = parts[10] ? parts[10].replace(/["'$]/g, "").trim() : "-";
-                if (factura.includes('.') || factura === idPart || factura.length < 2) factura = "-";
-
-                return {
-                    date: parts[dateIdx],
-                    name: namePart,
-                    id: idPart,
-                    amount: amount,
-                    source: type,
-                    status: 'pending',
-                    originalLine: line,
-                    factura: factura,
-                    metodoPago: metodoEncontrado
-                };
             }).filter(x => x !== null) as Transaction[];
 
             console.log(`✅ Procesados ${processed.length} registros válidos.`);

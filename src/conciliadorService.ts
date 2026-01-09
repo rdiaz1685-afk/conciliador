@@ -13,8 +13,9 @@ export interface Transaction {
     status: 'pending' | 'matched' | 'suggested';
     matchId?: string;
     originalLine?: any;
-    factura?: string;       // Columna K
-    metodoPago?: string;    // Columna M
+    factura?: string;       // Columna K (Index 10)
+    metodoPago?: string;    // Columna M (Index 12)
+    referencia?: string;    // Columna I (Index 8)
 }
 
 export interface ConciliationResult {
