@@ -79,14 +79,26 @@ const App = () => {
                 const namePart = parts.find(p => p.length > 10 && !p.includes('/')) || "S/N";
                 const idPart = parts.find(p => p.length >= 4 && p.length <= 8 && !isNaN(Number(p.replace(/\D/g, "")))) || "S/R";
 
-                // 4. DATOS ESPECÍFICOS (Forzando columnas K=10 y M=12 con limpieza extrema)
-                let facturaEncontrada = parts[10] ? parts[10].replace(/["'$]/g, "").trim() : "-";
-                let metodoEncontrado = parts[12] ? parts[12].replace(/["'$]/g, "").trim() : "-";
+                // 4. LÓGICA DE "BUSCARV COMPUESTO" (ID + MONTO + FECHA)
+                // Si ya tenemos ID, Monto y Fecha, los campos restantes deben ser Factura y Método
+                const pms = ['TARJETA', 'EFECTIVO', 'STP', 'TRANSFERENCIA', 'CHEQUE', 'DEPOSITO', 'TERMINAL', 'EFEC', 'TRA'];
 
-                // Si la factura capturada parece un monto (tiene decimales o es igual al monto), la limpiamos
-                if (facturaEncontrada.includes('.') || cleanAmount(facturaEncontrada) === amount) {
-                    facturaEncontrada = "-";
-                }
+                // Buscamos el método de pago en cualquier parte de la fila
+                const metodoEncontrado = parts.find(p => pms.some(m => p.toUpperCase().includes(m))) || "-";
+
+                // Buscamos la FACTURA: Es un campo que no es el ID, ni el Monto, ni el Nombre, ni la Fecha
+                // Y suele tener entre 4 y 10 caracteres
+                const facturaEncontrada = parts.find(p => {
+                    const cleanP = p.replace(/["']/g, "").trim();
+                    return cleanP.length >= 3 &&
+                        cleanP !== idPart &&
+                        cleanP !== parts[dateIdx] &&
+                        !cleanP.includes('/') &&
+                        !cleanP.includes('$') &&
+                        !cleanP.includes('.') && // Si tiene punto es un monto, lo ignoramos
+                        !pms.some(m => cleanP.toUpperCase().includes(m)) &&
+                        cleanP.length < 12;
+                }) || "-";
 
                 return {
                     date: parts[dateIdx],
@@ -96,8 +108,8 @@ const App = () => {
                     source: type,
                     status: 'pending',
                     originalLine: line,
-                    factura: facturaEncontrada,
-                    metodoPago: metodoEncontrado
+                    factura: facturaEncontrada.replace(/["']/g, ""),
+                    metodoPago: metodoEncontrado.replace(/["']/g, "")
                 };
             }).filter(x => x !== null) as Transaction[];
 
