@@ -79,21 +79,14 @@ const App = () => {
                 const namePart = parts.find(p => p.length > 10 && !p.includes('/')) || "S/N";
                 const idPart = parts.find(p => p.length >= 4 && p.length <= 8 && !isNaN(Number(p.replace(/\D/g, "")))) || "S/R";
 
-                // 4. DETECTIVE DE DATOS (Factura, Método Pago)
-                // Buscamos patrones en toda la fila para no depender de la columna exacta
-                const pms = ['TARJETA', 'EFECTIVO', 'STP', 'TRANSFERENCIA', 'CHEQUE', 'DEPOSITO', 'TERMINAL'];
-                const metodoEncontrado = parts.find(p => pms.some(m => p.toUpperCase().includes(m))) || "-";
+                // 4. DATOS ESPECÍFICOS (Forzando columnas K=10 y M=12 con limpieza extrema)
+                let facturaEncontrada = parts[10] ? parts[10].replace(/["'$]/g, "").trim() : "-";
+                let metodoEncontrado = parts[12] ? parts[12].replace(/["'$]/g, "").trim() : "-";
 
-                // La factura suele ser el campo que queda que no es ID, ni Nombre, ni Fecha, ni Monto.
-                // O podemos buscar si tiene un formato común (ej: que empiece por letra o tenga más de 5 dígitos)
-                const facturaEncontrada = parts.find(p =>
-                    p.length >= 4 &&
-                    p !== idPart &&
-                    p !== parts[dateIdx] &&
-                    !p.includes('/') &&
-                    !pms.some(m => p.toUpperCase().includes(m)) &&
-                    p.length < 15 // Las facturas no suelen ser tan largas como los nombres
-                ) || "-";
+                // Si la factura capturada parece un monto (tiene decimales o es igual al monto), la limpiamos
+                if (facturaEncontrada.includes('.') || cleanAmount(facturaEncontrada) === amount) {
+                    facturaEncontrada = "-";
+                }
 
                 return {
                     date: parts[dateIdx],
