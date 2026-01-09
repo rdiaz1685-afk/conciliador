@@ -37,6 +37,22 @@ const App = () => {
         XLSX.writeFile(workbook, `Conciliacion_Diciembre_${Date.now()}.xlsx`);
     };
 
+    // Función para partir CSV respetando comillas (para montos con coma "$1,200")
+    const splitCSV = (line: string) => {
+        const result = [];
+        let cur = '';
+        let inQuote = false;
+        for (let char of line) {
+            if (char === '"') inQuote = !inQuote;
+            else if (char === ',' && !inQuote) {
+                result.push(cur.trim());
+                cur = '';
+            } else cur += char;
+        }
+        result.push(cur.trim());
+        return result;
+    }
+
     // Simulador de carga de archivos (Pronto lo conectaremos a tu CSV real)
     const handleFileUpload = (e: any, type: 'innovat' | 'banco') => {
         const file = e.target.files[0];
@@ -49,56 +65,36 @@ const App = () => {
             console.log(`Analizando ${lines.length} líneas del archivo...`);
 
             const processed: Transaction[] = lines.map((line) => {
-                const parts = line.split(',').map(p => p.trim());
-
-                // BUSCADOR INTELIGENTE DE DATOS: 
-                // No dependemos de la columna, buscamos patrones en toda la fila.
+                if (!line.trim()) return null;
+                const parts = splitCSV(line);
 
                 // 1. Buscar algo que parezca una FECHA (DD/MM/YYYY)
                 const dateIdx = parts.findIndex(p => /\d{1,2}\/\d{1,2}\/\d{4}/.test(p));
                 if (dateIdx === -1) return null;
 
-                // 2. Buscar algo que parezca un MONTO (Que tenga $ o números con decimales)
-                // Buscamos la primera parte que después de limpiar tenga un valor > 0
+                // 2. Buscar algo que parezca un MONTO
                 let amount = 0;
-                let amountIdx = -1;
-
                 for (let i = 0; i < parts.length; i++) {
                     const val = cleanAmount(parts[i]);
-                    if (val > 0 && i !== dateIdx) { // Evitamos confundir Claves con Montos si es posible
+                    if (val > 0 && i !== dateIdx && parts[i].includes('.')) {
                         amount = val;
-                        amountIdx = i;
                         break;
                     }
                 }
-
                 if (amount <= 0) return null;
 
-                // 3. Buscar Nombre e ID (Basado en lo que sobra)
-                // Normalmente el nombre es la parte más larga y el ID es un número corto
-                const namePart = parts.find(p => p.length > 10 && !p.includes('/')) || "S/N";
+                // 3. Buscar Nombre e ID
+                const namePart = parts.find(p => p.length > 10 && !p.includes('/') && !p.includes('$')) || "S/N";
                 const idPart = parts.find(p => p.length >= 4 && p.length <= 8 && !isNaN(Number(p.replace(/\D/g, "")))) || "S/R";
 
-                // 4. LÓGICA DE "BUSCARV COMPUESTO" (ID + MONTO + FECHA)
-                // Si ya tenemos ID, Monto y Fecha, los campos restantes deben ser Factura y Método
-                const pms = ['TARJETA', 'EFECTIVO', 'STP', 'TRANSFERENCIA', 'CHEQUE', 'DEPOSITO', 'TERMINAL', 'EFEC', 'TRA'];
+                // 4. LÓGICA DE EXTRACCIÓN (K=10 y M=12)
+                // Usamos una lista de palabras MÁS corta y precisa para el método
+                const pms = ['TARJETA', 'EFECTIVO', 'STP', 'CHEQUE', 'DEPOSITO', 'TERMINAL'];
+                const metodoEncontrado = parts.find(p => pms.some(m => p.toUpperCase() === m)) || "-";
 
-                // Buscamos el método de pago en cualquier parte de la fila
-                const metodoEncontrado = parts.find(p => pms.some(m => p.toUpperCase().includes(m))) || "-";
-
-                // Buscamos la FACTURA: Es un campo que no es el ID, ni el Monto, ni el Nombre, ni la Fecha
-                // Y suele tener entre 4 y 10 caracteres
-                const facturaEncontrada = parts.find(p => {
-                    const cleanP = p.replace(/["']/g, "").trim();
-                    return cleanP.length >= 3 &&
-                        cleanP !== idPart &&
-                        cleanP !== parts[dateIdx] &&
-                        !cleanP.includes('/') &&
-                        !cleanP.includes('$') &&
-                        !cleanP.includes('.') && // Si tiene punto es un monto, lo ignoramos
-                        !pms.some(m => cleanP.toUpperCase().includes(m)) &&
-                        cleanP.length < 12;
-                }) || "-";
+                // Buscamos la FACTURA (Columna K es índice 10)
+                let factura = parts[10] ? parts[10].replace(/["'$]/g, "").trim() : "-";
+                if (factura.includes('.') || factura === idPart || factura.length < 2) factura = "-";
 
                 return {
                     date: parts[dateIdx],
@@ -108,8 +104,8 @@ const App = () => {
                     source: type,
                     status: 'pending',
                     originalLine: line,
-                    factura: facturaEncontrada.replace(/["']/g, ""),
-                    metodoPago: metodoEncontrado.replace(/["']/g, "")
+                    factura: factura,
+                    metodoPago: metodoEncontrado
                 };
             }).filter(x => x !== null) as Transaction[];
 
