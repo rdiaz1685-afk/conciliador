@@ -38,14 +38,18 @@ const App = () => {
         XLSX.writeFile(workbook, `Conciliacion_Diciembre_${Date.now()}.xlsx`);
     };
 
-    // Función para partir CSV respetando comillas (para montos con coma "$1,200")
+    // Función para partir CSV respetando comillas y detectando separador (; o ,)
     const splitCSV = (line: string) => {
+        const commaCount = (line.match(/,/g) || []).length;
+        const semiCount = (line.match(/;/g) || []).length;
+        const sep = semiCount > commaCount ? ';' : ',';
+
         const result = [];
         let cur = '';
         let inQuote = false;
         for (let char of line) {
             if (char === '"') inQuote = !inQuote;
-            else if (char === ',' && !inQuote) {
+            else if (char === sep && !inQuote) {
                 result.push(cur.trim());
                 cur = '';
             } else cur += char;
@@ -70,41 +74,59 @@ const App = () => {
                 const parts = splitCSV(line);
 
                 if (type === 'innovat') {
-                    // LÓGICA FIJA PARA INNOVAT (Basada en tu archivo):
-                    // 0: Fecha, 1: Nombre, 2: Clave/ID, 3: Importe, ..., 8: Ref (I), 10: Factura (K), 12: Pago (M)
-                    const date = parts[0] || "";
-                    if (!/\d{1,2}\/\d{1,2}\/\d{4}/.test(date)) return null;
+                    // 1. Identificar campos básicos primero
+                    const dateIdx = parts.findIndex(p => /\d{1,2}\/\d{1,2}\/\d{4}/.test(p));
+                    if (dateIdx === -1) return null;
+                    const date = parts[dateIdx];
 
-                    const name = parts[1] || "S/N";
-                    const id = parts[2] || "S/R";
-                    const amount = cleanAmount(parts[3] || "0");
-                    if (amount <= 0) return null;
+                    const amountVal = cleanAmount(parts.find(p => p.includes('.') && cleanAmount(p) > 0) || "0");
+                    if (amountVal <= 0) return null;
+
+                    // El ID suele ser una parte numérica de 4-7 dígitos que NO es el monto
+                    const idPart = parts.find(p => {
+                        const clean = p.replace(/\D/g, "");
+                        return clean.length >= 4 && clean.length <= 7 && cleanAmount(p) !== amountVal;
+                    }) || "S/R";
+
+                    const namePart = parts.find(p => p.length > 12 && !p.includes('/') && !p.includes('$')) || "S/N";
+
+                    // 2. BUSCADOR INTELIGENTE DE DATOS EXTRA (Por eliminación)
+                    const candidates = parts.filter((p, idx) => {
+                        const clean = p.replace(/["'$]/g, "").trim();
+                        if (!clean || clean === "-" || clean.length < 2) return false;
+                        if (idx === dateIdx) return false;
+                        if (cleanAmount(p) === amountVal) return false;
+                        if (clean === idPart || p.includes(idPart)) return false;
+                        if (p === namePart || namePart.includes(p)) return false;
+                        if (p.includes('/')) return false;
+                        return true;
+                    });
+
+                    const pms = ['TARJETA', 'EFECTIVO', 'STP', 'TRANSFERENCIA', 'CHEQUE', 'DEPOSITO', 'TERMINAL', 'TRA', 'EFEC', 'SANTANDER', 'BANCOMER', 'SPEI'];
+                    const metodo = candidates.find(p => pms.some(m => p.toUpperCase().includes(m))) || "-";
+
+                    const others = candidates.filter(p => p !== metodo);
+                    const factura = others[0] || (parts[10] && parts[10].length > 2 ? parts[10] : "-");
+                    const referencia = others[1] || (parts[8] && parts[8].length > 2 ? parts[8] : "-");
 
                     return {
                         date,
-                        name,
-                        id: id.replace(/["']/g, ""),
-                        amount,
+                        name: namePart,
+                        id: idPart.replace(/["']/g, ""),
+                        amount: amountVal,
                         source: type,
                         status: 'pending',
                         originalLine: line,
-                        factura: parts[10] ? parts[10].replace(/["'$]/g, "").trim() : "-",
-                        metodoPago: parts[12] ? parts[12].replace(/["'$]/g, "").trim() : "-",
-                        referencia: parts[8] ? parts[8].replace(/["'$]/g, "").trim() : "-"
+                        factura: factura.replace(/["']/g, "").trim(),
+                        metodoPago: metodo.replace(/["']/g, "").trim(),
+                        referencia: referencia.replace(/["']/g, "").trim()
                     };
                 } else {
-                    // BANCO: Mantenemos el Detector Inteligente
+                    // BANCO: Detección Automática Estándar
                     const dateIdx = parts.findIndex(p => /\d{1,2}\/\d{1,2}\/\d{4}/.test(p));
                     if (dateIdx === -1) return null;
 
-                    let amount = 0;
-                    for (let i = 0; i < parts.length; i++) {
-                        const val = cleanAmount(parts[i]);
-                        if (val > 0 && i !== dateIdx && parts[i].includes('.')) {
-                            amount = val;
-                            break;
-                        }
-                    }
+                    const amount = cleanAmount(parts.find(p => p.includes('.') && cleanAmount(p) > 0) || "0");
                     if (amount <= 0) return null;
 
                     const namePart = parts.find(p => p.length > 10 && !p.includes('/') && !p.includes('$')) || "S/N";
@@ -256,6 +278,9 @@ const App = () => {
                                             <div className="flex-1">
                                                 <p className="text-[9px] font-black text-slate-500 uppercase tracking-tighter">Innovat: {m.a.id}</p>
                                                 <p className="text-sm font-bold text-white truncate">{m.a.name}</p>
+                                                {m.a.referencia && m.a.referencia !== '-' && (
+                                                    <p className="text-[10px] text-emerald-500/80 mt-1 font-bold italic">Ref: {m.a.referencia}</p>
+                                                )}
                                             </div>
                                             <div className="w-24 text-center">
                                                 <span className={`text-[9px] font-black px-4 py-1.5 rounded-full border ${m.confidence === 100
