@@ -79,11 +79,21 @@ const App = () => {
                 const namePart = parts.find(p => p.length > 10 && !p.includes('/')) || "S/N";
                 const idPart = parts.find(p => p.length >= 4 && p.length <= 8 && !isNaN(Number(p.replace(/\D/g, "")))) || "S/R";
 
-                // 4. DATOS ESPECÍFICOS (Solo para Innovat)
-                // Columna K (Factura), Metodo Pago (M), Referencia extra (I)
-                const factura = parts[10]; // K is 11th col -> index 10
-                const metodo = parts[12];  // M is 13th col -> index 12
-                const referenciaExtra = parts[8]; // I is 9th col -> index 8
+                // 4. DETECTIVE DE DATOS (Factura, Método Pago)
+                // Buscamos patrones en toda la fila para no depender de la columna exacta
+                const pms = ['TARJETA', 'EFECTIVO', 'STP', 'TRANSFERENCIA', 'CHEQUE', 'DEPOSITO', 'TERMINAL'];
+                const metodoEncontrado = parts.find(p => pms.some(m => p.toUpperCase().includes(m))) || "-";
+
+                // La factura suele ser el campo que queda que no es ID, ni Nombre, ni Fecha, ni Monto.
+                // O podemos buscar si tiene un formato común (ej: que empiece por letra o tenga más de 5 dígitos)
+                const facturaEncontrada = parts.find(p =>
+                    p.length >= 4 &&
+                    p !== idPart &&
+                    p !== parts[dateIdx] &&
+                    !p.includes('/') &&
+                    !pms.some(m => p.toUpperCase().includes(m)) &&
+                    p.length < 15 // Las facturas no suelen ser tan largas como los nombres
+                ) || "-";
 
                 return {
                     date: parts[dateIdx],
@@ -93,8 +103,8 @@ const App = () => {
                     source: type,
                     status: 'pending',
                     originalLine: line,
-                    factura: factura || "",
-                    metodoPago: metodo || ""
+                    factura: facturaEncontrada,
+                    metodoPago: metodoEncontrado
                 };
             }).filter(x => x !== null) as Transaction[];
 
