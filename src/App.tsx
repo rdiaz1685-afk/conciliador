@@ -55,7 +55,7 @@ const App = () => {
                 console.log(`--- Iniciando Procesamiento de ${type.toUpperCase()} ---`);
                 console.log(`Filas totales en archivo: ${rows.length}`);
 
-                // 1. IDENTIFICAR COLUMNAS (Buscamos encabezados en las primeras 20 filas)
+                // 1. IDENTIFICAR COLUMNAS (Buscamos encabezados en las primeras 25 filas)
                 let colMap = { date: -1, id: -1, name: -1, amount: -1, ref: -1, factura: -1, pago: -1 };
                 for (let i = 0; i < Math.min(25, rows.length); i++) {
                     const row = rows[i];
@@ -63,23 +63,42 @@ const App = () => {
                     row.forEach((cell, idx) => {
                         if (!cell) return;
                         const s = cell.toString().toUpperCase().trim();
-                        // Fecha
-                        if (s.includes('FECHA') || s.includes('EMISION')) colMap.date = idx;
+
+                        // Fecha (Prioridad alta)
+                        if ((s.includes('FECHA') || s.includes('EMISION')) && colMap.date === -1) {
+                            colMap.date = idx;
+                            return;
+                        }
                         // ID
-                        if (s === 'ID' || s.includes('MATRICULA') || s.includes('CLAVE') || s.includes('CONTROL') || s.includes('CLIENTE')) colMap.id = idx;
+                        if ((s === 'ID' || s.includes('MATRICULA') || s.includes('CLAVE') || s.includes('CONTROL')) && colMap.id === -1) {
+                            colMap.id = idx;
+                            return;
+                        }
                         // Nombre
-                        if (s.includes('NOMBRE') || s.includes('ALUMNO') || s.includes('RAZON')) colMap.name = idx;
-                        // Monto
-                        if (s.includes('IMPORTE') || s.includes('MONTO') || s.includes('CANTIDAD') || s.includes('TOTAL') || s.includes('NETO')) {
-                            // Si ya tenemos fecha y este es un numero, es probable que sea el monto
-                            if (colMap.amount === -1) colMap.amount = idx;
+                        if ((s.includes('NOMBRE') || s.includes('ALUMNO')) && colMap.name === -1) {
+                            colMap.name = idx;
+                            return;
+                        }
+                        // Monto (Evitar que sea la misma que fecha)
+                        if ((s.includes('IMPORTE') || s.includes('MONTO') || s.includes('CANTIDAD') || s.includes('TOTAL')) && idx !== colMap.date && colMap.amount === -1) {
+                            colMap.amount = idx;
+                            return;
                         }
                         // Factura
-                        if (s.includes('FACTURA') || s.includes('FOLIO') || s.includes('RECIBO') || s === 'FACT') colMap.factura = idx;
+                        if ((s.includes('FACTURA') || s.includes('FOLIO') || s === 'FACT') && colMap.factura === -1) {
+                            colMap.factura = idx;
+                            return;
+                        }
                         // Método de Pago
-                        if (s.includes('PAGO') || s.includes('METODO') || s.includes('FORMA') || s.includes('TIPO')) colMap.pago = idx;
+                        if ((s.includes('PAGO') || s.includes('METODO') || s.includes('FORMA')) && colMap.pago === -1) {
+                            colMap.pago = idx;
+                            return;
+                        }
                         // Referencia
-                        if (s.includes('REFERENCIA') || s.includes('OPERACION') || s.includes('BANCAR')) colMap.ref = idx;
+                        if ((s.includes('REFERENCIA') || s.includes('OPERACION') || s.includes('BANCAR')) && colMap.ref === -1) {
+                            colMap.ref = idx;
+                            return;
+                        }
                     });
                     if (colMap.date !== -1 && colMap.amount !== -1) break;
                 }
