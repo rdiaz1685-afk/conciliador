@@ -38,7 +38,7 @@ const App = () => {
         XLSX.writeFile(workbook, `Conciliacion_Diciembre_${Date.now()}.xlsx`);
     };
 
-    // Simulador de carga de archivos usando SheetJS (XLSX) para máxima compatibilidad
+    // Simulador de carga de archivos usando SheetJS (XLSX) con Detección Inteligente de Columnas
     const handleFileUpload = (e: any, type: 'innovat' | 'banco') => {
         const file = e.target.files[0];
         if (!file) return;
@@ -50,92 +50,118 @@ const App = () => {
                 const workbook = XLSX.read(data, { type: 'array', cellDates: true });
                 const firstSheetName = workbook.SheetNames[0];
                 const worksheet = workbook.Sheets[firstSheetName];
-
                 const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: true }) as any[][];
-                console.log(`Analizando ${rows.length} filas de ${type}...`);
+
+                console.log(`--- Iniciando Procesamiento de ${type.toUpperCase()} ---`);
+                console.log(`Filas totales en archivo: ${rows.length}`);
+
+                // 1. IDENTIFICAR COLUMNAS (Buscamos encabezados en las primeras 20 filas)
+                let colMap = { date: -1, id: -1, name: -1, amount: -1, ref: -1, factura: -1, pago: -1 };
+                for (let i = 0; i < Math.min(20, rows.length); i++) {
+                    const row = rows[i];
+                    if (!row) continue;
+                    row.forEach((cell, idx) => {
+                        if (!cell) return;
+                        const s = cell.toString().toUpperCase();
+                        if (s.includes('FECHA')) colMap.date = idx;
+                        if (s.includes('MATRICULA') || s.includes('CLAVE') || (s.includes('ID') && s.length < 5)) colMap.id = idx;
+                        if (s.includes('NOMBRE') || s.includes('ALUMNO')) colMap.name = idx;
+                        if (s.includes('IMPORTE') || s.includes('MONTO') || s.includes('CANTIDAD')) colMap.amount = idx;
+                        if (s.includes('FACTURA') || s.includes('FOLIO')) colMap.factura = idx;
+                        if (s.includes('PAGO') || s.includes('METODO')) colMap.pago = idx;
+                        if (s.includes('REFERENCIA')) colMap.ref = idx;
+                    });
+                    if (colMap.date !== -1 && colMap.amount !== -1) break;
+                }
+
+                console.log("Mapa de columnas detectado:", colMap);
+
+                let lastValidDate = "01/12/2025";
+                let skippedRows = 0;
 
                 const processed: Transaction[] = rows.map((parts, rowIndex) => {
-                    if (!parts || parts.length < 3) return null;
+                    if (!parts || parts.length < 2) return null;
 
-                    // 1. Identificar FECHA
+                    // A. Extraer Fecha (Con memoria para reportes agrupados)
                     let date = "";
-                    const dateIdx = parts.findIndex(p => {
-                        if (p instanceof Date) return true;
-                        if (p && /\d{1,2}\/\d{1,2}\/\d{4}/.test(p.toString())) return true;
-                        return false;
-                    });
+                    const dateIdx = colMap.date !== -1 ? colMap.date : parts.findIndex(p => p instanceof Date || (p && /\d{1,2}\/\d{1,2}\/\d{4}/.test(p.toString())));
 
-                    if (dateIdx !== -1) {
+                    if (dateIdx !== -1 && parts[dateIdx]) {
                         const d = parts[dateIdx];
                         date = d instanceof Date ? d.toLocaleDateString('es-MX') : d.toString();
-                    } else return null;
-
-                    // 2. Identificar MONTO (Cualquier número > 0 que no sea la fecha ni un ID corto)
-                    let amountVal = 0;
-                    let amountIdx = -1;
-
-                    // Prioridad a la columna 3 (típica de Innovat)
-                    const p3 = cleanAmount(parts[3]?.toString() || "0");
-                    if (p3 > 0 && (parts[3]?.toString().includes('.') || p3 > 10)) {
-                        amountVal = p3;
-                        amountIdx = 3;
+                        if (/\d{1,2}\/\d{1,2}\/\d{4}/.test(date)) lastValidDate = date;
                     } else {
-                        // Si no, buscamos el primer valor que parezca dinero
-                        amountIdx = parts.findIndex((p, idx) => {
-                            if (idx === dateIdx || !p) return false;
-                            const val = cleanAmount(p.toString());
-                            // Un monto suele tener decimales o ser un numero razonable (>100)
-                            return val > 0 && (p.toString().includes('.') || val > 50);
-                        });
-                        if (amountIdx !== -1) amountVal = cleanAmount(parts[amountIdx].toString());
+                        date = lastValidDate;
                     }
 
-                    if (amountVal <= 0) return null;
+                    // B. Extraer Monto
+                    let amountVal = 0;
+                    let amountIdx = colMap.amount;
+                    if (amountIdx !== -1 && parts[amountIdx] !== undefined) {
+                        amountVal = typeof parts[amountIdx] === 'number' ? parts[amountIdx] : cleanAmount(parts[amountIdx].toString());
+                    } else {
+                        const foundIdx = parts.findIndex((p, idx) => {
+                            if (idx === dateIdx || !p) return false;
+                            const val = cleanAmount(p.toString());
+                            return val > 0 && (p.toString().includes('.') || val > 100) && p.toString().length < 15;
+                        });
+                        if (foundIdx !== -1) {
+                            amountVal = cleanAmount(parts[foundIdx].toString());
+                            amountIdx = foundIdx;
+                        }
+                    }
+
+                    if (amountVal <= 0) {
+                        skippedRows++;
+                        return null;
+                    }
+
+                    // C. Extraer ID y Nombre
+                    let id = colMap.id !== -1 ? parts[colMap.id]?.toString() : parts.find((p, idx) => {
+                        if (!p || idx === amountIdx || idx === dateIdx) return false;
+                        const s = p.toString().replace(/\D/g, "");
+                        return s && s.length >= 4 && s.length <= 8 && cleanAmount(p.toString()) !== amountVal;
+                    })?.toString();
+
+                    let name = colMap.name !== -1 ? parts[colMap.name]?.toString() : parts.find(p => p && p.toString().length > 10 && !p.toString().includes('/') && !p.toString().includes('$'))?.toString();
 
                     if (type === 'innovat') {
-                        // ID: Columna 2 o el que tenga cara de matrícula/clave (4-7 dígitos)
-                        let id = parts[2]?.toString() || "";
-                        if (!id || id.length < 3 || id.length > 8 || isNaN(Number(id))) {
-                            const foundId = parts.find((p, idx) => {
-                                if (!p || idx === amountIdx || idx === dateIdx) return false;
-                                const s = p.toString().replace(/\D/g, "");
-                                return s.length >= 4 && s.length <= 7;
-                            });
-                            id = foundId?.toString() || id || "S/R";
-                        }
-
-                        // Nombre: Columna 1 o el campo de texto más largo
-                        let name = parts[1]?.toString() || "";
-                        if (name.length < 8) {
-                            name = parts.find(p => p && p.toString().length > 10 && !p.toString().includes('/') && !p.toString().includes('$'))?.toString() || name || "S/N";
-                        }
-
                         return {
-                            date, name, id: id.replace(/["']/g, ""), amount: amountVal,
-                            source: type, status: 'pending', originalLine: parts.join(','),
-                            factura: (parts[10]?.toString() || "-").trim(),
-                            metodoPago: (parts[12]?.toString() || "-").trim(),
-                            referencia: (parts[8]?.toString() || "-").trim()
+                            date: date || lastValidDate,
+                            name: (name || "S/R").trim(),
+                            id: (id || "S/R").toString().replace(/["']/g, "").trim(),
+                            amount: amountVal,
+                            source: type,
+                            status: 'pending',
+                            originalLine: parts.join(','),
+                            factura: (colMap.factura !== -1 ? parts[colMap.factura] : (parts[10] || "-"))?.toString() || "-",
+                            metodoPago: (colMap.pago !== -1 ? parts[colMap.pago] : (parts[12] || "-"))?.toString() || "-",
+                            referencia: (colMap.ref !== -1 ? parts[colMap.ref] : (parts[8] || "-"))?.toString() || "-"
                         };
                     } else {
-                        // BANCO
-                        const namePart = parts.find(p => p && p.toString().length > 10 && !p.toString().includes('/') && !p.toString().includes('$'))?.toString() || "S/N";
-                        const idPart = parts.find(p => p && p.toString().length >= 4 && p.toString().length <= 8 && !isNaN(Number(p.toString().replace(/\D/g, ""))))?.toString() || "S/R";
-
                         return {
-                            date, name: namePart, id: idPart, amount: amountVal,
-                            source: type, status: 'pending', originalLine: parts.join(','),
+                            date: date || lastValidDate,
+                            name: (name || "BANCO").trim(),
+                            id: (id || "S/R").toString().trim(),
+                            amount: amountVal,
+                            source: type,
+                            status: 'pending',
+                            originalLine: parts.join(','),
                             factura: "-", metodoPago: "-", referencia: "-"
                         };
                     }
                 }).filter(x => x !== null) as Transaction[];
 
-                console.log(`✅ Procesados ${processed.length} registros válidos.`);
+                const totalCalculado = processed.reduce((sum, t) => sum + t.amount, 0);
+                console.log(`✅ Procesados ${processed.length} registros de ${type}. Total: $${totalCalculado.toLocaleString()}`);
+                console.log(`❌ Filas descartadas: ${skippedRows}`);
+
                 if (type === 'innovat') setInnovatData(processed);
                 else setBancoData(processed);
+
             } catch (err) {
-                console.error("Error al procesar:", err);
-                alert("Error al leer el archivo.");
+                console.error("Error fatal en procesamiento:", err);
+                alert("Error al procesar. Revisa la consola (F12).");
             }
         };
         reader.readAsArrayBuffer(file);
