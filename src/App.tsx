@@ -57,19 +57,29 @@ const App = () => {
 
                 // 1. IDENTIFICAR COLUMNAS (Buscamos encabezados en las primeras 20 filas)
                 let colMap = { date: -1, id: -1, name: -1, amount: -1, ref: -1, factura: -1, pago: -1 };
-                for (let i = 0; i < Math.min(20, rows.length); i++) {
+                for (let i = 0; i < Math.min(25, rows.length); i++) {
                     const row = rows[i];
                     if (!row) continue;
                     row.forEach((cell, idx) => {
                         if (!cell) return;
-                        const s = cell.toString().toUpperCase();
-                        if (s.includes('FECHA')) colMap.date = idx;
-                        if (s.includes('MATRICULA') || s.includes('CLAVE') || (s.includes('ID') && s.length < 5)) colMap.id = idx;
-                        if (s.includes('NOMBRE') || s.includes('ALUMNO')) colMap.name = idx;
-                        if (s.includes('IMPORTE') || s.includes('MONTO') || s.includes('CANTIDAD')) colMap.amount = idx;
-                        if (s.includes('FACTURA') || s.includes('FOLIO')) colMap.factura = idx;
-                        if (s.includes('PAGO') || s.includes('METODO')) colMap.pago = idx;
-                        if (s.includes('REFERENCIA')) colMap.ref = idx;
+                        const s = cell.toString().toUpperCase().trim();
+                        // Fecha
+                        if (s.includes('FECHA') || s.includes('EMISION')) colMap.date = idx;
+                        // ID
+                        if (s === 'ID' || s.includes('MATRICULA') || s.includes('CLAVE') || s.includes('CONTROL') || s.includes('CLIENTE')) colMap.id = idx;
+                        // Nombre
+                        if (s.includes('NOMBRE') || s.includes('ALUMNO') || s.includes('RAZON')) colMap.name = idx;
+                        // Monto
+                        if (s.includes('IMPORTE') || s.includes('MONTO') || s.includes('CANTIDAD') || s.includes('TOTAL') || s.includes('NETO')) {
+                            // Si ya tenemos fecha y este es un numero, es probable que sea el monto
+                            if (colMap.amount === -1) colMap.amount = idx;
+                        }
+                        // Factura
+                        if (s.includes('FACTURA') || s.includes('FOLIO') || s.includes('RECIBO') || s === 'FACT') colMap.factura = idx;
+                        // Método de Pago
+                        if (s.includes('PAGO') || s.includes('METODO') || s.includes('FORMA') || s.includes('TIPO')) colMap.pago = idx;
+                        // Referencia
+                        if (s.includes('REFERENCIA') || s.includes('OPERACION') || s.includes('BANCAR')) colMap.ref = idx;
                     });
                     if (colMap.date !== -1 && colMap.amount !== -1) break;
                 }
@@ -117,26 +127,43 @@ const App = () => {
                     }
 
                     // C. Extraer ID y Nombre
-                    let id = colMap.id !== -1 ? parts[colMap.id]?.toString() : parts.find((p, idx) => {
+                    let idRaw = colMap.id !== -1 ? parts[colMap.id] : parts.find((p, idx) => {
                         if (!p || idx === amountIdx || idx === dateIdx) return false;
                         const s = p.toString().replace(/\D/g, "");
-                        return s && s.length >= 4 && s.length <= 8 && cleanAmount(p.toString()) !== amountVal;
-                    })?.toString();
+                        return s && s.length >= 3 && s.length <= 8 && cleanAmount(p.toString()) !== amountVal;
+                    });
 
-                    let name = colMap.name !== -1 ? parts[colMap.name]?.toString() : parts.find(p => p && p.toString().length > 10 && !p.toString().includes('/') && !p.toString().includes('$'))?.toString();
+                    let id = (idRaw || "S/R").toString().replace(/["']/g, "").trim();
+                    let name = (colMap.name !== -1 ? parts[colMap.name] : parts.find(p => p && p.toString().length > 10 && !p.toString().includes('/') && !p.toString().includes('$')))?.toString() || "S/R";
+
+                    // --- FILTRO DE SEGURIDAD (EXCLUIR TOTALES/RESUMENES) ---
+                    // Si el nombre es un número gigante, o contiene palabras de categorías, o el ID es "S/R", ignorar.
+                    const nameUpper = name.toUpperCase();
+                    const isSummary = nameUpper.includes('TOTAL') || nameUpper.includes('PREESCOLAR') || nameUpper.includes('PRIMARIA') ||
+                        nameUpper.includes('SECUNDARIA') || nameUpper.includes('NURSERY') || nameUpper.includes('DEPOSITOS') ||
+                        !isNaN(Number(name.replace(/[$,]/g, "")));
+
+                    if (type === 'innovat' && (id === "S/R" || isSummary)) {
+                        skippedRows++;
+                        return null;
+                    }
 
                     if (type === 'innovat') {
+                        const factura = (colMap.factura !== -1 ? parts[colMap.factura] : parts[10])?.toString() || "-";
+                        const pago = (colMap.pago !== -1 ? parts[colMap.pago] : parts[12])?.toString() || "-";
+                        const ref = (colMap.ref !== -1 ? parts[colMap.ref] : parts[9])?.toString() || "-"; // Usualmente en Innovat la Ref es la 9 o 8
+
                         return {
                             date: date || lastValidDate,
-                            name: (name || "S/R").trim(),
-                            id: (id || "S/R").toString().replace(/["']/g, "").trim(),
+                            name: name.trim(),
+                            id: id,
                             amount: amountVal,
                             source: type,
                             status: 'pending',
                             originalLine: parts.join(','),
-                            factura: (colMap.factura !== -1 ? parts[colMap.factura] : (parts[10] || "-"))?.toString() || "-",
-                            metodoPago: (colMap.pago !== -1 ? parts[colMap.pago] : (parts[12] || "-"))?.toString() || "-",
-                            referencia: (colMap.ref !== -1 ? parts[colMap.ref] : (parts[8] || "-"))?.toString() || "-"
+                            factura: factura.trim(),
+                            metodoPago: pago.trim(),
+                            referencia: ref.trim()
                         };
                     } else {
                         return {
