@@ -38,120 +38,105 @@ const App = () => {
         XLSX.writeFile(workbook, `Conciliacion_Diciembre_${Date.now()}.xlsx`);
     };
 
-    // Función para partir CSV respetando comillas y detectando separador (; o ,)
-    const splitCSV = (line: string) => {
-        const commaCount = (line.match(/,/g) || []).length;
-        const semiCount = (line.match(/;/g) || []).length;
-        const sep = semiCount > commaCount ? ';' : ',';
-
-        const result = [];
-        let cur = '';
-        let inQuote = false;
-        for (let char of line) {
-            if (char === '"') inQuote = !inQuote;
-            else if (char === sep && !inQuote) {
-                result.push(cur.trim());
-                cur = '';
-            } else cur += char;
-        }
-        result.push(cur.trim());
-        return result;
-    }
-
-    // Simulador de carga de archivos (Pronto lo conectaremos a tu CSV real)
+    // Simulador de carga de archivos usando SheetJS (XLSX) para máxima compatibilidad
     const handleFileUpload = (e: any, type: 'innovat' | 'banco') => {
         const file = e.target.files[0];
         if (!file) return;
 
         const reader = new FileReader();
         reader.onload = (event) => {
-            const text = event.target?.result as string;
-            const lines = text.split('\n');
-            console.log(`Analizando ${lines.length} líneas del archivo...`);
+            try {
+                const data = new Uint8Array(event.target?.result as ArrayBuffer);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
 
-            const processed: Transaction[] = lines.map((line) => {
-                if (!line.trim()) return null;
-                const parts = splitCSV(line);
+                // Convertimos a matriz de arreglos (rows) para procesar
+                const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+                console.log(`Analizando ${rows.length} filas del archivo...`);
 
-                if (type === 'innovat') {
-                    // 1. Identificar campos básicos primero
-                    const dateIdx = parts.findIndex(p => /\d{1,2}\/\d{1,2}\/\d{4}/.test(p));
-                    if (dateIdx === -1) return null;
-                    const date = parts[dateIdx];
+                const processed: Transaction[] = rows.map((parts) => {
+                    if (!parts || parts.length < 3) return null;
 
-                    const amountVal = cleanAmount(parts.find(p => p.includes('.') && cleanAmount(p) > 0) || "0");
+                    // 1. Identificar campos básicos
+                    const datePart = parts.find(p => p && /\d{1,2}\/\d{1,2}\/\d{4}/.test(p.toString()));
+                    if (!datePart) return null;
+                    const date = datePart.toString();
+
+                    // Monto: Buscamos un número o string que parezca monto
+                    const amountSearch = parts.find(p => p && p.toString().includes('.') && cleanAmount(p.toString()) > 0);
+                    const amountVal = amountSearch ? cleanAmount(amountSearch.toString()) : 0;
                     if (amountVal <= 0) return null;
 
-                    // El ID suele ser una parte numérica de 4-7 dígitos que NO es el monto
-                    const idPart = parts.find(p => {
-                        const clean = p.replace(/\D/g, "");
-                        return clean.length >= 4 && clean.length <= 7 && cleanAmount(p) !== amountVal;
-                    }) || "S/R";
+                    if (type === 'innovat') {
+                        // ID (4-7 dígitos) que NO sea el monto
+                        const idPart = parts.find(p => {
+                            if (!p) return false;
+                            const s = p.toString().replace(/\D/g, "");
+                            return s.length >= 4 && s.length <= 7 && cleanAmount(p.toString()) !== amountVal;
+                        })?.toString() || "S/R";
 
-                    const namePart = parts.find(p => p.length > 12 && !p.includes('/') && !p.includes('$')) || "S/N";
+                        const namePart = parts.find(p => p && p.toString().length > 12 && !p.toString().includes('/') && !p.toString().includes('$'))?.toString() || "S/N";
 
-                    // 2. BUSCADOR INTELIGENTE DE DATOS EXTRA (Por eliminación)
-                    const candidates = parts.filter((p, idx) => {
-                        const clean = p.replace(/["'$]/g, "").trim();
-                        if (!clean || clean === "-" || clean.length < 2) return false;
-                        if (idx === dateIdx) return false;
-                        if (cleanAmount(p) === amountVal) return false;
-                        if (clean === idPart || p.includes(idPart)) return false;
-                        if (p === namePart || namePart.includes(p)) return false;
-                        if (p.includes('/')) return false;
-                        return true;
-                    });
+                        // 2. BUSCADOR INTELIGENTE DE DATOS EXTRA
+                        const candidates = parts.filter(p => {
+                            if (!p) return false;
+                            const s = p.toString().trim();
+                            if (s === "-" || s.length < 2) return false;
+                            if (s === date) return false;
+                            if (cleanAmount(s) === amountVal || s.includes('$')) return false;
+                            if (s === idPart || namePart.includes(s) || s === namePart) return false;
+                            if (s.includes('/')) return false;
+                            return true;
+                        }).map(p => p.toString());
 
-                    const pms = ['TARJETA', 'EFECTIVO', 'STP', 'TRANSFERENCIA', 'CHEQUE', 'DEPOSITO', 'TERMINAL', 'TRA', 'EFEC', 'SANTANDER', 'BANCOMER', 'SPEI'];
-                    const metodo = candidates.find(p => pms.some(m => p.toUpperCase().includes(m))) || "-";
+                        const pms = ['TARJETA', 'EFECTIVO', 'STP', 'TRANSFERENCIA', 'CHEQUE', 'DEPOSITO', 'TERMINAL', 'SANTANDER', 'BANCOMER', 'SPEI', 'NOMINA', 'DESC'];
+                        const metodoEncontrado = candidates.find(p => pms.some(m => p.toUpperCase().includes(m))) || "-";
 
-                    const others = candidates.filter(p => p !== metodo);
-                    const factura = others[0] || (parts[10] && parts[10].length > 2 ? parts[10] : "-");
-                    const referencia = others[1] || (parts[8] && parts[8].length > 2 ? parts[8] : "-");
+                        const others = candidates.filter(p => p !== metodoEncontrado);
+                        const factura = others.find(p => p.length > 2 && !pms.some(m => p.toUpperCase().includes(m))) || "-";
+                        const referencia = others.find(p => p !== factura) || "-";
 
-                    return {
-                        date,
-                        name: namePart,
-                        id: idPart.replace(/["']/g, ""),
-                        amount: amountVal,
-                        source: type,
-                        status: 'pending',
-                        originalLine: line,
-                        factura: factura.replace(/["']/g, "").trim(),
-                        metodoPago: metodo.replace(/["']/g, "").trim(),
-                        referencia: referencia.replace(/["']/g, "").trim()
-                    };
-                } else {
-                    // BANCO: Detección Automática Estándar
-                    const dateIdx = parts.findIndex(p => /\d{1,2}\/\d{1,2}\/\d{4}/.test(p));
-                    if (dateIdx === -1) return null;
+                        return {
+                            date,
+                            name: namePart,
+                            id: idPart,
+                            amount: amountVal,
+                            source: type,
+                            status: 'pending',
+                            originalLine: parts.join(','),
+                            factura: factura.replace(/["']/g, "").trim(),
+                            metodoPago: metodoEncontrado.replace(/["']/g, "").trim(),
+                            referencia: referencia.replace(/["']/g, "").trim()
+                        };
+                    } else {
+                        const namePart = parts.find(p => p && p.toString().length > 10 && !p.toString().includes('/') && !p.toString().includes('$'))?.toString() || "S/N";
+                        const idPart = parts.find(p => p && p.toString().length >= 4 && p.toString().length <= 8 && !isNaN(Number(p.toString().replace(/\D/g, ""))))?.toString() || "S/R";
 
-                    const amount = cleanAmount(parts.find(p => p.includes('.') && cleanAmount(p) > 0) || "0");
-                    if (amount <= 0) return null;
+                        return {
+                            date,
+                            name: namePart,
+                            id: idPart,
+                            amount: amountVal,
+                            source: type,
+                            status: 'pending',
+                            originalLine: parts.join(','),
+                            factura: "-",
+                            metodoPago: "-",
+                            referencia: "-"
+                        };
+                    }
+                }).filter(x => x !== null) as Transaction[];
 
-                    const namePart = parts.find(p => p.length > 10 && !p.includes('/') && !p.includes('$')) || "S/N";
-                    const idPart = parts.find(p => p.length >= 4 && p.length <= 8 && !isNaN(Number(p.replace(/\D/g, "")))) || "S/R";
-
-                    return {
-                        date: parts[dateIdx],
-                        name: namePart,
-                        id: idPart,
-                        amount: amount,
-                        source: type,
-                        status: 'pending',
-                        originalLine: line,
-                        factura: "-",
-                        metodoPago: "-",
-                        referencia: "-"
-                    };
-                }
-            }).filter(x => x !== null) as Transaction[];
-
-            console.log(`✅ Procesados ${processed.length} registros válidos.`);
-            if (type === 'innovat') setInnovatData(processed);
-            else setBancoData(processed);
+                console.log(`✅ Procesados ${processed.length} registros válidos.`);
+                if (type === 'innovat') setInnovatData(processed);
+                else setBancoData(processed);
+            } catch (err) {
+                console.error("Error al procesar archivo:", err);
+                alert("Error al leer el archivo. Asegúrate de que es un CSV o Excel válido.");
+            }
         };
-        reader.readAsText(file);
+        reader.readAsArrayBuffer(file);
     };
 
     const runAnalysis = () => {
