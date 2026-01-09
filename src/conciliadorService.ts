@@ -13,6 +13,8 @@ export interface Transaction {
     status: 'pending' | 'matched' | 'suggested';
     matchId?: string;
     originalLine?: any;
+    factura?: string;       // Columna K
+    metodoPago?: string;    // Columna M
 }
 
 export interface ConciliationResult {

@@ -12,21 +12,23 @@ const App = () => {
         if (!data) return;
 
         const worksheetData = [
-            ["ID Innovat", "Nombre Innovat", "Monto Innovat", "Fecha Banco", "Confianza", "Status"],
+            ["ID Innovat", "Nombre Innovat", "Factura", "Método Pago", "Monto Innovat", "Fecha Banco", "Confianza", "Status"],
             ...data.matches.map((m: any) => [
                 m.a.id,
                 m.a.name,
+                m.a.factura || "-",
+                m.a.metodoPago || "-",
                 m.a.amount,
                 m.b.date,
                 m.confidence + "%",
                 m.confidence === 100 ? "Conciliado" : "Sugerido"
             ]),
             [],
-            ["Solo en Innovat", "", "Importe"],
-            ...data.onlyInnovat.map((t: any) => [t.id, t.name, t.amount]),
+            ["Solo en Innovat", "Nombre", "Factura", "Pago", "Importe"],
+            ...data.onlyInnovat.map((t: any) => [t.id, t.name, t.factura || "-", t.metodoPago || "-", t.amount]),
             [],
-            ["Solo en Banco", "", "Importe"],
-            ...data.onlyBanco.map((t: any) => [t.id, t.name, t.amount])
+            ["Solo en Banco", "", "", "", "Importe"],
+            ...data.onlyBanco.map((t: any) => [t.id, t.name, "-", "-", t.amount])
         ];
 
         const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
@@ -77,6 +79,12 @@ const App = () => {
                 const namePart = parts.find(p => p.length > 10 && !p.includes('/')) || "S/N";
                 const idPart = parts.find(p => p.length >= 4 && p.length <= 8 && !isNaN(Number(p.replace(/\D/g, "")))) || "S/R";
 
+                // 4. DATOS ESPECÍFICOS (Solo para Innovat)
+                // Columna K (Factura), Metodo Pago (M), Referencia extra (I)
+                const factura = parts[10]; // K is 11th col -> index 10
+                const metodo = parts[12];  // M is 13th col -> index 12
+                const referenciaExtra = parts[8]; // I is 9th col -> index 8
+
                 return {
                     date: parts[dateIdx],
                     name: namePart,
@@ -84,7 +92,9 @@ const App = () => {
                     amount: amount,
                     source: type,
                     status: 'pending',
-                    originalLine: line
+                    originalLine: line,
+                    factura: factura || "",
+                    metodoPago: metodo || ""
                 };
             }).filter(x => x !== null) as Transaction[];
 
@@ -111,8 +121,20 @@ const App = () => {
                     <p className="text-emerald-500 font-black uppercase tracking-[0.4em] text-[10px] mb-2">Módulo de Auditoría</p>
                     <h1 className="text-5xl font-black text-white uppercase tracking-tighter italic">Conciliador <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-500">Pro</span></h1>
                 </div>
-                <div className="text-right">
-                    <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Colegio Dominio • Diciembre 2025</p>
+                <div className="text-right flex items-end gap-6">
+                    <div>
+                        <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Colegio Dominio • Diciembre 2025</p>
+                    </div>
+                    <button
+                        onClick={() => {
+                            setInnovatData([]);
+                            setBancoData([]);
+                            setResults(null);
+                        }}
+                        className="px-4 py-2 border border-red-500/30 text-red-500 text-[9px] font-black uppercase rounded-lg hover:bg-red-500 hover:text-white transition-all"
+                    >
+                        ✕ Salir / Limpiar
+                    </button>
                 </div>
             </header>
 
